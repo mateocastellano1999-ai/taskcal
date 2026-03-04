@@ -528,11 +528,29 @@
   </div>
 </main>
 
-<script>
+<script type="module">
+  // ════════════════════════════════
+  //  FIREBASE
+  // ════════════════════════════════
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDg8Ufw6C6ogJ9EhZIwlO0EYQe6_TfnP6w",
+    authDomain: "taskcal-app-de233.firebaseapp.com",
+    projectId: "taskcal-app-de233",
+    storageBucket: "taskcal-app-de233.firebasestorage.app",
+    messagingSenderId: "789632213949",
+    appId: "1:789632213949:web:988761fc63e85fce4f28d4"
+  };
+
+  const fbApp = initializeApp(firebaseConfig);
+  const db    = getFirestore(fbApp);
+
   // ════════════════════════════════
   //  ESTADO
   // ════════════════════════════════
-  let tasks = JSON.parse(localStorage.getItem('taskcal_tasks') || '[]');
+  let tasks = [];
   let calView      = new Date();
   let selectedDate = new Date();
   let currentFilter   = 'all';
@@ -551,9 +569,35 @@
   const CATS      = { trabajo:'💼', personal:'🏠', salud:'❤️', estudio:'📚', otro:'⭐', '':'' };
 
   // ════════════════════════════════
-  //  PERSISTENCIA
+  //  PERSISTENCIA FIREBASE
   // ════════════════════════════════
-  function saveTasks() { localStorage.setItem('taskcal_tasks', JSON.stringify(tasks)); }
+  async function saveTask(task) {
+    await setDoc(doc(db, 'tasks', task.id), task);
+  }
+
+  async function removeTask(id) {
+    await deleteDoc(doc(db, 'tasks', id));
+  }
+
+  async function saveLabel(label) {
+    await setDoc(doc(db, 'labels', label.id), label);
+  }
+
+  async function removeLabel(id) {
+    await deleteDoc(doc(db, 'labels', id));
+  }
+
+  // Escuchar cambios en tiempo real
+  onSnapshot(collection(db, 'tasks'), snap => {
+    tasks = snap.docs.map(d => d.data());
+    renderMiniCal(); renderTasks(); updateStats();
+    if (currentViewMode === 'week') renderWeekView();
+  });
+
+  onSnapshot(collection(db, 'labels'), snap => {
+    labels = snap.docs.map(d => d.data());
+    renderLabelList(); renderLabelsSelector(); renderTasks();
+  });
 
   // ════════════════════════════════
   //  MINI CALENDARIO
@@ -714,7 +758,8 @@
         dayList.splice(toIdx, 0, moved);
 
         tasks = [...rest, ...dayList];
-        saveTasks();
+        // Guardar nuevo orden en Firebase
+        dayList.forEach(t => saveTask(t));
         renderTasks();
         showToast('↕️', 'Tarea reordenada', 'El nuevo orden ha sido guardado.', 'success');
       });
@@ -732,13 +777,12 @@
     const t = tasks.find(t => t.id === id);
     if (!t) return;
     t.done = !t.done;
-    saveTasks(); renderTasks(); updateStats();
+    saveTask(t);
     if (t.done) showToast('✅', '¡Tarea completada!', escHtml(t.title), 'success');
   }
 
   function deleteTask(id) {
-    tasks = tasks.filter(t => t.id !== id);
-    saveTasks(); renderMiniCal(); renderTasks(); updateStats();
+    removeTask(id);
     showToast('🗑️', 'Tarea eliminada', '', '');
   }
 
@@ -774,7 +818,7 @@
       created:  Date.now()
     };
     tasks.push(task);
-    saveTasks();
+    saveTask(task);
 
     document.getElementById('taskTitle').value = '';
     document.getElementById('taskDesc').value  = '';
@@ -785,8 +829,7 @@
     selectedDate = new Date(date + 'T12:00:00');
     calView      = new Date(date + 'T12:00:00');
 
-    renderMiniCal(); renderTasks(); updateDateDisplay(); updateStats();
-    if (currentViewMode === 'week') renderWeekView();
+    updateDateDisplay();
     scheduleNotification(task);
     showToast('✅', '¡Tarea guardada!',
       time ? `Recordatorio programado a las ${time}` : 'Tarea añadida correctamente.',
@@ -1019,10 +1062,10 @@
   // ════════════════════════════════
   //  ETIQUETAS PERSONALIZADAS
   // ════════════════════════════════
-  let labels = JSON.parse(localStorage.getItem('taskcal_labels') || '[]');
+  let labels = [];
   let selectedLabels = new Set();
 
-  function saveLabels() { localStorage.setItem('taskcal_labels', JSON.stringify(labels)); }
+  function saveLabels() { /* Firebase maneja esto */ }
 
   function renderLabelList() {
     const list = document.getElementById('labelList');
@@ -1080,11 +1123,14 @@
   }
 
   function deleteLabel(id) {
-    labels = labels.filter(l => l.id !== id);
+    removeLabel(id);
     // Quitar de todas las tareas
-    tasks.forEach(t => { if (t.labels) t.labels = t.labels.filter(lid => lid !== id); });
-    saveLabels(); saveTasks();
-    renderLabelList(); renderLabelsSelector(); renderTasks();
+    tasks.forEach(t => {
+      if (t.labels && t.labels.includes(id)) {
+        t.labels = t.labels.filter(lid => lid !== id);
+        saveTask(t);
+      }
+    });
     showToast('🏷️', 'Etiqueta eliminada', '', '');
   }
 
@@ -1095,10 +1141,10 @@
     if (labels.find(l => l.name.toLowerCase() === name.toLowerCase())) {
       showToast('⚠️', 'Ya existe', 'Esa etiqueta ya está creada.', 'error'); return;
     }
-    labels.push({ id: Date.now().toString(), name, color });
-    saveLabels();
+    const newLabel = { id: Date.now().toString(), name, color };
+    labels.push(newLabel);
+    saveLabel(newLabel);
     document.getElementById('newLabelName').value = '';
-    renderLabelList(); renderLabelsSelector();
     showToast('🏷️', `Etiqueta "${name}" creada`, '', 'success');
   });
 
@@ -1116,14 +1162,11 @@
   //  INIT
   // ════════════════════════════════
   document.getElementById('taskDate').value = dateStr(selectedDate);
-  renderMiniCal();
-  renderTasks();
   updateDateDisplay();
-  updateStats();
   updateNotifStatus();
-  scheduleAllNotifications();
   renderLabelList();
   renderLabelsSelector();
+  // Las tareas y etiquetas se cargan automáticamente via onSnapshot de Firebase
 </script>
 </body>
 </html>
